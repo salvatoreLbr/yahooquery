@@ -583,7 +583,7 @@ class _YahooFinance(object):
             },
         },
         "quoteSummary": {
-            "path": "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
+            "path": "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?module=summaryDetail&ssl=true&crumb={crumb}",
             "response_field": "quoteSummary",
             "query": {
                 "formatted": {"required": False, "default": False},
@@ -926,7 +926,8 @@ class _YahooFinance(object):
     def __init__(self, **kwargs):
         self.country = kwargs.get("country", "united states").lower()
         self.formatted = kwargs.pop("formatted", False)
-        self.session, self.crumb = _init_session(kwargs.pop("session", None), **kwargs)
+        self.session, self.cookies = _init_session(kwargs.pop("session", None), **kwargs)
+        self.crumb = self._get_crumb()
         self.progress = kwargs.pop("progress", False)
         username = os.getenv("YF_USERNAME") or kwargs.get("username")
         password = os.getenv("YF_PASSWORD") or kwargs.get("password")
@@ -1025,6 +1026,21 @@ class _YahooFinance(object):
                 invalid_symbols.append(k)
         self.symbols = valid_symbols
         self.invalid_symbols = invalid_symbols or None
+    
+    def _get_crumb(self):
+        """Retrieve crumb from yahoo finance
+
+        Yahoo Finance requires a crumb to be passed as a query parameter
+        to certain endpoints.  This will be called in the event the crumb
+        is None
+        """
+        if not isinstance(self.session, FuturesSession):
+            crumb_response = self.session.get("https://query2.finance.yahoo.com/v1/test/getcrumb", cookies={"A3": self.cookies})
+            if crumb_response.status_code == 200:
+                return crumb_response.text
+            else:
+                raise Exception("!!! crumb not got !!!")
+        return ""
 
     def _format_data(self, obj, dates):
         for k, v in obj.items():
@@ -1133,6 +1149,18 @@ class _YahooFinance(object):
         elif "symbols" in config["query"]:
             params.update({"symbols": ",".join(self._symbols)})
             urls = [self.session.get(url=config["path"], params=params)]
+        elif config["response_field"] == "quoteSummary":
+            ls = (
+                self._symbols
+                if isinstance(self.session, FuturesSession)
+                else tqdm(self._symbols, disable=not self.progress)
+            )
+            urls = [
+                self.session.get(
+                    url=config["path"].format(**{"symbol": symbol, "crumb": self.crumb}), params=params, cookies={"A3": self.cookies}
+                )
+                for symbol in ls
+            ]
         else:
             ls = (
                 self._symbols
